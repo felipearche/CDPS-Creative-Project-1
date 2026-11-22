@@ -1,7 +1,5 @@
 """Gestión de máquinas KVM y redes OVS para la Creativa 1 de CDPS."""
 
-from __future__ import annotations
-
 import copy
 import logging
 from pathlib import Path
@@ -269,7 +267,10 @@ class VM:
         if shutil.which("gnome-terminal"):
             cmd = ["gnome-terminal", "--title", self.name, "--", "sudo", "virsh", "console", self.name]
         elif shutil.which("xfce4-terminal"):
-            cmd = ["xfce4-terminal", "-T", self.name, "--hide-menubar", "-e", f"sudo virsh console {self.name}"]
+            cmd = [
+                "xfce4-terminal", "-T", self.name, "--hide-menubar",
+                "-e", f"sudo virsh console {self.name}",
+            ]
         elif shutil.which("xterm"):
             cmd = ["xterm", "-T", self.name, "-e", "sudo", "virsh", "console", self.name]
         elif shutil.which("virt-viewer"):
