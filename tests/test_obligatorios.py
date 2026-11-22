@@ -511,10 +511,9 @@ class ObligatoriosSinKvm(unittest.TestCase):
                     ):
                         app.host_network(state)
 
+                operation = "addr" if mode == "direccion" else "route"
                 self.assertFalse(
-                    any(args[:4] == ["sudo", "ip", "addr", "add"] for args in calls)
-                    if mode == "direccion" else
-                    any(args[:4] == ["sudo", "ip", "route", "add"] for args in calls),
+                    any(args[:4] == ["sudo", "ip", operation, "add"] for args in calls),
                     "No se debe crear un recurso sin haber registrado su propiedad",
                 )
 
@@ -546,7 +545,7 @@ class ObligatoriosSinKvm(unittest.TestCase):
                 return "shut off"
 
             def show_console_vm(self):
-                self.fail("No debe abrir consolas tras fallar el arranque")
+                raise AssertionError("No debe abrir consolas tras fallar el arranque")
 
         self_error = self.lib.ErrorEscenario
         with patch.object(app, "NET", FakeNET), patch.object(app, "VM", FakeVM), \
