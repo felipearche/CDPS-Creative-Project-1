@@ -122,17 +122,17 @@ def host_network(state):
     ejecutar(["sudo", "ip", "link", "set", "dev", "RED1", "up"])
     addresses = ejecutar(["ip", "-4", "-o", "addr", "show", "dev", "RED1"]).stdout
     if HOST_ADDRESS not in addresses:
-        ejecutar(["sudo", "ip", "addr", "add", HOST_ADDRESS, "dev", "RED1"])
         state["host_address_added"] = True
         save_state(state)
+        ejecutar(["sudo", "ip", "addr", "add", HOST_ADDRESS, "dev", "RED1"])
     for network in HOST_ROUTES:
         existing = ejecutar(["ip", "-4", "route", "show", network]).stdout.strip()
         if not existing:
-            ejecutar(["sudo", "ip", "route", "add", network,
-                      "via", HOST_GATEWAY, "dev", "RED1"])
             if network not in state["host_routes_added"]:
                 state["host_routes_added"].append(network)
                 save_state(state)
+            ejecutar(["sudo", "ip", "route", "add", network,
+                      "via", HOST_GATEWAY, "dev", "RED1"])
         elif f"via {HOST_GATEWAY}" not in existing or "dev RED1" not in existing:
             raise ErrorEscenario(f"Existe una ruta conflictiva hacia {network}: {existing}")
     LOG.info("Host configurado en RED1 (%s)", HOST_ADDRESS)
@@ -164,8 +164,14 @@ def define(num_servers):
     LOG.info("Definiendo escenario con %s servidores", num_servers)
     try:
         for name in NETWORKS:
-            if NET(name).create_net():
-                state["bridges_added"].append(name)
+            net = NET(name)
+            if net.exists():
+                LOG.info("El bridge %s ya existía; se reutiliza", name)
+                continue
+            state["bridges_added"].append(name)
+            save_state(state)
+            if not net.create_net():
+                state["bridges_added"].remove(name)
                 save_state(state)
         host_network(state)
         for name, interfaces, forwarding in specs:
