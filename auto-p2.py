@@ -192,8 +192,15 @@ def define(num_servers):
 def start():
     state = load_state()
     for name in NETWORKS:
-        if NET(name).create_net() and name not in state["bridges_added"]:
+        net = NET(name)
+        if net.exists():
+            continue
+        already_tracked = name in state["bridges_added"]
+        if not already_tracked:
             state["bridges_added"].append(name)
+            save_state(state)
+        if not net.create_net() and not already_tracked:
+            state["bridges_added"].remove(name)
             save_state(state)
     host_network(state)
     # Los routers se arrancan primero, pero el script no espera a que completen cloud-init.
