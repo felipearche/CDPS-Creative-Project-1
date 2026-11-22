@@ -163,6 +163,8 @@ class ObligatoriosSinKvm(unittest.TestCase):
         class FakeNET:
             def __init__(self, name):
                 self.name = name
+            def exists(self):
+                return False
             def create_net(self):
                 return True
         with patch.object(app, "VM", FakeVM), patch.object(app, "NET", FakeNET), \
@@ -382,6 +384,8 @@ class ObligatoriosSinKvm(unittest.TestCase):
         class FakeNET:
             def __init__(self, name):
                 self.name = name
+            def exists(self):
+                return self.name in bridges
             def create_net(self):
                 if self.name in bridges:
                     return False
@@ -411,11 +415,164 @@ class ObligatoriosSinKvm(unittest.TestCase):
                 return False
         with patch.object(app, "VM", FakeVM), patch.object(app, "NET") as fake_net, \
              patch.object(app, "undefine", side_effect=self.lib.ErrorEscenario("limpieza falló")):
+            fake_net.return_value.exists.return_value = False
             fake_net.return_value.create_net.side_effect = self.lib.ErrorEscenario("fallo de bridge")
             with self.assertRaisesRegex(self.lib.ErrorEscenario, "Conservamos el estado"):
                 app.define(1)
         self.assertTrue(app.STATE.exists())
         self.assertEqual(app.load_state()["vms"], ["c1", "fw", "lb", "s1"])
+
+
+    def test_fallo_guardado_estado_no_deja_bridge_huerfano(self):
+        app = self.app
+        bridges = set()
+        original_save = app.save_state
+        saves = 0
+
+        class FakeVM:
+            def __init__(self, name):
+                self.name = name
+                self.xml = app.ROOT / f"{name}.xml"
+                self.disk = app.ROOT / f"{name}.qcow2"
+                self.iso = app.ROOT / f"{name}-cdata.iso"
+
+            def is_defined(self):
+                return False
+
+            def stop_vm(self):
+                pass
+
+            def state(self):
+                return None
+
+            def undefine_vm(self):
+                pass
+
+            def remove_files(self):
+                pass
+
+        class FakeNET:
+            def __init__(self, name):
+                self.name = name
+
+            def exists(self):
+                return self.name in bridges
+
+            def create_net(self):
+                if self.exists():
+                    return False
+                bridges.add(self.name)
+                return True
+
+            def destroy_net(self):
+                bridges.discard(self.name)
+
+        def save_with_failure(state):
+            nonlocal saves
+            saves += 1
+            if saves == 2:
+                raise self.lib.ErrorEscenario("fallo simulado de guardado")
+            original_save(state)
+
+        with patch.object(app, "VM", FakeVM), patch.object(app, "NET", FakeNET), \
+             patch.object(app, "save_state", side_effect=save_with_failure), \
+             patch.object(app, "host_network"):
+            with self.assertRaisesRegex(
+                self.lib.ErrorEscenario, "fallo simulado de guardado"
+            ):
+                app.define(1)
+
+        self.assertFalse(bridges, "No deben quedar bridges sin registrar")
+        self.assertFalse(app.STATE.exists(), "El rollback debe limpiar el estado")
+
+    def test_fallo_guardado_no_añade_ip_ni_ruta_sin_inventario(self):
+        app = self.app
+        for mode in ("direccion", "ruta"):
+            with self.subTest(mode=mode):
+                calls = []
+                state = self.valid_state()
+                state["host_address_added"] = False
+                state["host_routes_added"] = []
+
+                def fake_exec(args, **kwargs):
+                    calls.append(args)
+                    output = ""
+                    if args[:4] == ["ip", "-4", "-o", "addr"] and mode == "ruta":
+                        output = "4: RED1 inet 10.0.10.3/26 scope global RED1"
+                    return subprocess.CompletedProcess(args, 0, output, "")
+
+                with patch.object(app, "ejecutar", side_effect=fake_exec), \
+                     patch.object(
+                         app, "save_state",
+                         side_effect=self.lib.ErrorEscenario("fallo guardado")
+                     ):
+                    with self.assertRaisesRegex(
+                        self.lib.ErrorEscenario, "fallo guardado"
+                    ):
+                        app.host_network(state)
+
+                self.assertFalse(
+                    any(args[:4] == ["sudo", "ip", "addr", "add"] for args in calls)
+                    if mode == "direccion" else
+                    any(args[:4] == ["sudo", "ip", "route", "add"] for args in calls),
+                    "No se debe crear un recurso sin haber registrado su propiedad",
+                )
+
+    def test_start_parcial_se_notifica_y_sigue_siendo_recuperable(self):
+        app = self.app
+        app.save_state(self.valid_state())
+        events = []
+
+        class FakeNET:
+            def __init__(self, name):
+                pass
+
+            def create_net(self):
+                return False
+
+        class FakeVM:
+            def __init__(self, name):
+                self.name = name
+
+            def start_vm(self):
+                events.append(self.name)
+                if self.name == "lb":
+                    raise self_error("arranque fallido simulado")
+
+            def stop_vm(self):
+                pass
+
+            def state(self):
+                return "shut off"
+
+            def show_console_vm(self):
+                self.fail("No debe abrir consolas tras fallar el arranque")
+
+        self_error = self.lib.ErrorEscenario
+        with patch.object(app, "NET", FakeNET), patch.object(app, "VM", FakeVM), \
+             patch.object(app, "host_network"):
+            with self.assertRaisesRegex(self_error, "arranque fallido simulado"):
+                app.start()
+            self.assertEqual(events, ["fw", "lb"])
+            self.assertTrue(app.STATE.exists())
+            app.stop()  # La operación de recuperación sigue disponible.
+
+    def test_cli_aplica_realmente_nivel_info_y_debug(self):
+        import logging
+
+        for debug, level in ((False, logging.INFO), (True, logging.DEBUG)):
+            with self.subTest(debug=debug):
+                self.app.CONFIG.write_text(
+                    json.dumps({"num_servers": 1, "debug": debug})
+                )
+                with patch.object(self.app, "define") as define, \
+                     patch.object(sys, "argv", ["auto-p2.py", "define"]), \
+                     patch.object(logging, "basicConfig") as configure:
+                    self.assertEqual(self.app.main(), 0)
+                define.assert_called_once_with(1)
+                self.assertEqual(configure.call_args.kwargs["level"], level)
+                self.assertIs(configure.call_args.kwargs["stream"], sys.stdout)
+
 
 
 if __name__ == "__main__":
