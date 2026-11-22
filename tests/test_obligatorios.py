@@ -517,6 +517,36 @@ class ObligatoriosSinKvm(unittest.TestCase):
                     "No se debe crear un recurso sin haber registrado su propiedad",
                 )
 
+    def test_start_no_crea_bridge_sin_guardar_su_inventario(self):
+        app = self.app
+        state = self.valid_state()
+        state["bridges_added"] = []
+        app.save_state(state)
+        bridges = set()
+
+        class FakeNET:
+            def __init__(self, name):
+                self.name = name
+
+            def exists(self):
+                return self.name in bridges
+
+            def create_net(self):
+                bridges.add(self.name)
+                return True
+
+        with patch.object(app, "NET", FakeNET), patch.object(
+            app, "save_state",
+            side_effect=self.lib.ErrorEscenario("fallo de guardado en start")
+        ):
+            with self.assertRaisesRegex(
+                self.lib.ErrorEscenario, "fallo de guardado en start"
+            ):
+                app.start()
+
+        self.assertFalse(bridges)
+        self.assertTrue(app.STATE.exists())
+
     def test_start_parcial_se_notifica_y_sigue_siendo_recuperable(self):
         app = self.app
         app.save_state(self.valid_state())
@@ -525,6 +555,9 @@ class ObligatoriosSinKvm(unittest.TestCase):
         class FakeNET:
             def __init__(self, name):
                 pass
+
+            def exists(self):
+                return True
 
             def create_net(self):
                 return False
