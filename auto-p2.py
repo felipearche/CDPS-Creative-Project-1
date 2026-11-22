@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Creativa 1 de CDPS: define, start, stop y undefine del escenario KVM."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging
@@ -188,11 +186,9 @@ def define(num_servers):
 def start():
     state = load_state()
     for name in NETWORKS:
-        if not NET(name).exists():
-            if NET(name).create_net():
-                if name not in state["bridges_added"]:
-                    state["bridges_added"].append(name)
-                    save_state(state)
+        if NET(name).create_net() and name not in state["bridges_added"]:
+            state["bridges_added"].append(name)
+            save_state(state)
     host_network(state)
     # Los routers se arrancan primero, pero el script no espera a que completen cloud-init.
     order = [n for n in ("fw", "lb", "c1") if n in state["vms"]]
